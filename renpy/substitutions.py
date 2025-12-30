@@ -32,13 +32,14 @@ import re
 import sys
 import collections
 
+# Registry for custom conversion functions
+_custom_conversions = {}
 
 update_translations = "RENPY_UPDATE_TRANSLATIONS" in os.environ
 flags = frozenset("rstiqulc!")
 formatter = string.Formatter()
 
 SIMPLE_NAME = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
-
 
 def interpolate(s, scope):
     """
@@ -114,8 +115,8 @@ def parse(s):
     CONVERSION = 2
     FORMAT = 3
 
-    # Conversion flags that we accept.
-    FLAGS = flags
+    # Conversion flags that we accept (built-in + custom)
+    FLAGS = flags | set(_custom_conversions.keys())
 
     # Markers and offsets for slicing.
     pos = -1
@@ -300,6 +301,14 @@ def convert(value, conv, scope):
     if "c" in conv:
         value = value[:1].capitalize() + value[1:]
 
+    # Process custom conversions
+    custom_flags = conv & set(_custom_conversions.keys())
+    for flag in custom_flags:
+        try:
+            value = _custom_conversions[flag]['handler'](value, scope)
+        except Exception as e:
+            raise ValueError(f"Custom conversion '{flag}' failed: {e}") from e
+
     return value
 
 
@@ -371,3 +380,53 @@ def ___(s):
     scope = sys._getframe(1).f_locals
 
     return substitute(s, scope)[0]
+
+def register_custom_conversion(flag, handler, description=""):
+    """
+    Register a custom conversion flag for string interpolation.
+    
+    Args:
+        flag: A single character to use as the conversion flag (e.g., 'x')
+        handler: A callable that takes (value, scope) and returns the converted value
+        description: Optional description of what this conversion does
+    
+    Example:
+        def reverse_string(value, scope):
+            return str(value)[::-1]
+        
+        renpy.register_custom_conversion('v', reverse_string, "Reverses the string")
+        
+        # Usage: "[variable!v]" will reverse the variable's string representation
+    """
+    if not isinstance(flag, str) or len(flag) != 1:
+        raise ValueError("Flag must be a single character")
+    
+    if flag in flags:
+        raise ValueError(f"Flag '{flag}' is already a built-in conversion flag")
+    
+    if not callable(handler):
+        raise ValueError("Handler must be callable")
+    
+    _custom_conversions[flag] = {
+        'handler': handler,
+        'description': description
+    }
+
+def unregister_custom_conversion(flag):
+    """
+    Remove a custom conversion flag.
+    
+    Args:
+        flag: The flag character to remove
+    """
+    if flag in _custom_conversions:
+        del _custom_conversions[flag]
+
+def get_custom_conversions():
+    """
+    Get a dictionary of all registered custom conversions.
+    
+    Returns:
+        Dict mapping flag characters to their info dicts
+    """
+    return _custom_conversions.copy()
